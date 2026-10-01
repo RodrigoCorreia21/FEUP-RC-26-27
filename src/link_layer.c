@@ -8,6 +8,21 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <signal.h>
+
+int alarmEnabled = FALSE;
+int alarmCount = 0;
+
+// Alarm function handler.
+// This function will run whenever the signal SIGALRM is received.
+void alarmHandler(int signal)
+{
+    alarmEnabled = FALSE;
+    alarmCount++;
+
+    printf("Alarm #%d received\n", alarmCount);
+}
+
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
@@ -86,14 +101,19 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
     while (ticks > 0)
     {
         unsigned char byte;
+
         int res = readByteSerialPort(&byte);
 
         if (res < 0)
-            return -1;
+        {
+            if (alarmEnabled == FALSE) {
+                return 0; 
+            }
+            return -1; 
+        }
 
         if (res == 0)
         {
-            // No byte received in this 0.1 s interval
             ticks--;
             continue;
         }
@@ -160,6 +180,15 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("Serial port %s opened (Tx)\n", llParameters.serialPort);
 
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        closeSerialPort();
+        return -1;
+    }
+
     // SET frame: FLAG | A=0x03 | C=0x03 | BCC=0x03^0x03 | FLAG
     unsigned char setFrame[5] = {
         FLAG,
@@ -191,11 +220,14 @@ int llOpenTx(LinkLayer llParameters)
     PRINT_HEX("Expected BCC", expectedBcc);
 #endif
 
-    for (int attempt = 0; attempt <= llParameters.nRetransmissions; attempt++)
+    alarmCount = 0;
+    alarmEnabled = 0;
+
+    while (alarmCount <= llParameters.nRetransmissions)
     {
 #if DEBUG_FRAMES
         printf("Sending SET (attempt %d/%d)\n",
-               attempt + 1, llParameters.nRetransmissions + 1);
+               alarmCount + 1, llParameters.nRetransmissions + 1);
 #endif
 
         if (writeAll(setFrame, 5) < 0)
@@ -204,10 +236,15 @@ int llOpenTx(LinkLayer llParameters)
             return -1;
         }
 
+
+        alarm(llParameters.timeout);
+        alarmEnabled = 1;
+
         int res = waitForFrame(expectedA, expectedC, expectedBcc, llParameters.timeout);
 
         if (res == 1)
         {
+            alarm(0); 
             printf("Connection established (Tx received UA)\n");
             return 0;
         }
@@ -223,7 +260,7 @@ int llOpenTx(LinkLayer llParameters)
         printf("Timeout waiting for UA, retrying...\n");
 #endif
     }
-
+    printf("Failed to establish connection: Max retransmissions reached.\n");
     closeSerialPort();
     return -1;
 }

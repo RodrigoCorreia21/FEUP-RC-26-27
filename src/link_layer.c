@@ -7,6 +7,9 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <signal.h>
+#include <errno.h>
+#include <stdlib.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -23,13 +26,40 @@
 #define C_UA       0x07
 
 // Helper macros for hexadecimal debug printing.
-// The second form is used for compatibility with older compilers.
 #if DEBUG_FRAMES
 #define PRINT_HEX(label, var) \
     printf("%s = 0x%02X\n", label, (unsigned int)((var) & 0xFF))
 #else
 #define PRINT_HEX(label, var) ((void)0)
 #endif
+
+// ---------------------------------------------------------------------------
+// Alarm handling for retransmission timeout (Lab 2)
+// ---------------------------------------------------------------------------
+static volatile sig_atomic_t alarmEnabled = FALSE;
+static volatile sig_atomic_t alarmCount = 0;
+static volatile sig_atomic_t timeoutOccurred = FALSE;
+
+void alarmHandler(int signal)
+{
+    (void)signal;
+    alarmEnabled = FALSE;
+    alarmCount++;
+    timeoutOccurred = TRUE;
+    printf("Alarm #%d received\n", alarmCount);
+}
+
+static int installAlarmHandler(void)
+{
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        return -1;
+    }
+    return 0;
+}
 
 // Helper: write exactly nBytes to the serial port
 static int writeAll(const unsigned char *buf, int nBytes)
@@ -66,9 +96,13 @@ static void dumpFrame(const char *tag, const unsigned char *frame)
 #endif
 }
 
-// Helper: wait for a supervision frame of the form
+// ---------------------------------------------------------------------------
+// Wait for a supervision frame of the form
 //   FLAG | A | C | BCC | FLAG
 // Returns 1 if a valid frame was received, 0 on timeout, -1 on error.
+// If timeoutSec > 0, an alarm is set and the function returns 0 on timeout.
+// If timeoutSec == 0, the function blocks until a frame or error.
+// ---------------------------------------------------------------------------
 static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int timeoutSec)
 {
     typedef enum
@@ -81,27 +115,52 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
     } State;
 
     State state = STATE_START;
-    int ticks = timeoutSec * 10; // readByteSerialPort waits up to 0.1 s
+    int useAlarm = (timeoutSec > 0);
 
-    while (ticks > 0)
+    if (useAlarm)
     {
+        timeoutOccurred = FALSE;
+        alarmEnabled = TRUE;
+        alarm(timeoutSec);
+    }
+
+    while (1)
+    {
+        if (useAlarm && timeoutOccurred)
+        {
+            alarm(0);
+            alarmEnabled = FALSE;
+            return 0; // timeout
+        }
+
         unsigned char byte;
         int res = readByteSerialPort(&byte);
 
         if (res < 0)
+        {
+            if (errno == EINTR)
+            {
+                if (useAlarm && timeoutOccurred)
+                {
+                    alarm(0);
+                    alarmEnabled = FALSE;
+                    return 0; // timeout
+                }
+                continue; // interrupted by other signal, retry
+            }
+            if (useAlarm)
+                alarm(0);
             return -1;
+        }
 
         if (res == 0)
-        {
-            // No byte received in this 0.1 s interval
-            ticks--;
-            continue;
-        }
+            continue; // no byte (should not happen with VMIN=1)
 
 #if DEBUG_FRAMES
         PRINT_HEX("  Rx byte", byte);
 #endif
 
+        // State machine
         switch (state)
         {
         case STATE_START:
@@ -113,7 +172,7 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
             if (byte == a)
                 state = STATE_C;
             else if (byte == FLAG)
-                state = STATE_A; // stay waiting for start
+                state = STATE_A;
             else
                 state = STATE_START;
             break;
@@ -138,13 +197,18 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
 
         case STATE_FLAG:
             if (byte == FLAG)
+            {
+                if (useAlarm)
+                {
+                    alarm(0);
+                    alarmEnabled = FALSE;
+                }
                 return 1; // complete valid frame
+            }
             state = STATE_START;
             break;
         }
     }
-
-    return 0; // timeout
 }
 
 ////////////////////////////////////////////////
@@ -152,6 +216,9 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
 ////////////////////////////////////////////////
 int llOpenTx(LinkLayer llParameters)
 {
+    if (installAlarmHandler() < 0)
+        return -1;
+
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
@@ -230,6 +297,9 @@ int llOpenTx(LinkLayer llParameters)
 
 int llOpenRx(LinkLayer llParameters)
 {
+    if (installAlarmHandler() < 0)
+        return -1;
+
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
@@ -271,7 +341,8 @@ int llOpenRx(LinkLayer llParameters)
 
     while (1)
     {
-        int res = waitForFrame(expectedA, expectedC, expectedBcc, llParameters.timeout);
+        // For the receiver we wait indefinitely for a SET frame (timeout = 0).
+        int res = waitForFrame(expectedA, expectedC, expectedBcc, 0);
 
         if (res < 0)
         {
@@ -295,10 +366,7 @@ int llOpenRx(LinkLayer llParameters)
             return 0;
         }
 
-        // timeout -> keep waiting for SET
-#if DEBUG_FRAMES
-        printf("Timeout waiting for SET, still listening...\n");
-#endif
+        // res == 0 cannot happen because timeout is 0
     }
 }
 

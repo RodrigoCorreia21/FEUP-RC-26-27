@@ -36,17 +36,13 @@
 // ---------------------------------------------------------------------------
 // Alarm handling for retransmission timeout (Lab 2)
 // ---------------------------------------------------------------------------
-static volatile sig_atomic_t alarmEnabled = FALSE;
 static volatile sig_atomic_t alarmCount = 0;
 static volatile sig_atomic_t timeoutOccurred = FALSE;
 
 void alarmHandler(int signal)
 {
-    (void)signal;
-    alarmEnabled = FALSE;
     alarmCount++;
     timeoutOccurred = TRUE;
-    printf("Alarm #%d received\n", alarmCount);
 }
 
 static int installAlarmHandler(void)
@@ -79,23 +75,6 @@ static int writeAll(const unsigned char *buf, int nBytes)
     return written;
 }
 
-// Helper: dump a 5-byte supervision frame in hexadecimal
-static void dumpFrame(const char *tag, const unsigned char *frame)
-{
-#if DEBUG_FRAMES
-    printf("%s: FLAG=0x%02X A=0x%02X C=0x%02X BCC=0x%02X FLAG=0x%02X\n",
-           tag,
-           (unsigned int)(frame[0] & 0xFF),
-           (unsigned int)(frame[1] & 0xFF),
-           (unsigned int)(frame[2] & 0xFF),
-           (unsigned int)(frame[3] & 0xFF),
-           (unsigned int)(frame[4] & 0xFF));
-#else
-    (void)tag;
-    (void)frame;
-#endif
-}
-
 // ---------------------------------------------------------------------------
 // Wait for a supervision frame of the form
 //   FLAG | A | C | BCC | FLAG
@@ -108,10 +87,10 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
     typedef enum
     {
         STATE_START,
-        STATE_A,
-        STATE_C,
-        STATE_BCC,
-        STATE_FLAG
+        STATE_FLAG_RCV,
+        STATE_A_RCV,
+        STATE_C_RCV,
+        STATE_BCC_OK
     } State;
 
     State state = STATE_START;
@@ -120,7 +99,6 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
     if (useAlarm)
     {
         timeoutOccurred = FALSE;
-        alarmEnabled = TRUE;
         alarm(timeoutSec);
     }
 
@@ -129,7 +107,7 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
         if (useAlarm && timeoutOccurred)
         {
             alarm(0);
-            alarmEnabled = FALSE;
+            printf("Alarm #%d received\n", alarmCount);
             return 0; // timeout
         }
 
@@ -143,7 +121,7 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
                 if (useAlarm && timeoutOccurred)
                 {
                     alarm(0);
-                    alarmEnabled = FALSE;
+                    printf("Alarm #%d received\n", alarmCount);
                     return 0; // timeout
                 }
                 continue; // interrupted by other signal, retry
@@ -156,55 +134,33 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
         if (res == 0)
             continue; // no byte (should not happen with VMIN=1)
 
-#if DEBUG_FRAMES
-        PRINT_HEX("  Rx byte", byte);
-#endif
-
         // State machine
         switch (state)
         {
         case STATE_START:
-            if (byte == FLAG)
-                state = STATE_A;
+            if (byte == FLAG) state = STATE_FLAG_RCV;
             break;
 
-        case STATE_A:
-            if (byte == a)
-                state = STATE_C;
-            else if (byte == FLAG)
-                state = STATE_A;
-            else
-                state = STATE_START;
+        case STATE_FLAG_RCV:
+            if (byte == a) state = STATE_A_RCV;
+            else if (byte == FLAG) state = STATE_FLAG_RCV;
+            else state = STATE_START;
             break;
 
-        case STATE_C:
-            if (byte == c)
-                state = STATE_BCC;
-            else if (byte == FLAG)
-                state = STATE_A;
-            else
-                state = STATE_START;
+        case STATE_A_RCV:
+            if (byte == c) state = STATE_C_RCV;
+            else if (byte == FLAG) state = STATE_FLAG_RCV;
+            else state = STATE_START;
             break;
 
-        case STATE_BCC:
-            if (byte == bcc)
-                state = STATE_FLAG;
-            else if (byte == FLAG)
-                state = STATE_A;
-            else
-                state = STATE_START;
+        case STATE_C_RCV:
+            if (byte == bcc) state = STATE_BCC_OK;
+            else if (byte == FLAG) state = STATE_FLAG_RCV;
+            else state = STATE_START;
             break;
 
-        case STATE_FLAG:
-            if (byte == FLAG)
-            {
-                if (useAlarm)
-                {
-                    alarm(0);
-                    alarmEnabled = FALSE;
-                }
-                return 1; // complete valid frame
-            }
+        case STATE_BCC_OK:
+            if (byte == FLAG) return 1; // STOP
             state = STATE_START;
             break;
         }
@@ -236,34 +192,13 @@ int llOpenTx(LinkLayer llParameters)
         FLAG
     };
 
-#if DEBUG_FRAMES
-    printf("--- Building SET frame ---\n");
-    PRINT_HEX("FLAG", setFrame[0]);
-    PRINT_HEX("A   ", setFrame[1]);
-    PRINT_HEX("C   ", setFrame[2]);
-    PRINT_HEX("BCC ", setFrame[3]);
-    PRINT_HEX("FLAG", setFrame[4]);
-#endif
-    dumpFrame("SET (Tx -> Rx)", setFrame);
-
     // Expected UA frame from receiver: FLAG | A=0x03 | C=0x07 | BCC=0x03^0x07 | FLAG
     unsigned char expectedA   = A_SENDER; // answer from Receiver uses 0x03
     unsigned char expectedC   = C_UA;
     unsigned char expectedBcc = expectedA ^ expectedC; // 0x04
 
-#if DEBUG_FRAMES
-    printf("--- Expecting UA frame ---\n");
-    PRINT_HEX("Expected A  ", expectedA);
-    PRINT_HEX("Expected C  ", expectedC);
-    PRINT_HEX("Expected BCC", expectedBcc);
-#endif
-
     for (int attempt = 0; attempt <= llParameters.nRetransmissions; attempt++)
     {
-#if DEBUG_FRAMES
-        printf("Sending SET (attempt %d/%d)\n",
-               attempt + 1, llParameters.nRetransmissions + 1);
-#endif
 
         if (writeAll(setFrame, 5) < 0)
         {
@@ -284,11 +219,6 @@ int llOpenTx(LinkLayer llParameters)
             closeSerialPort();
             return -1;
         }
-
-        // timeout -> retry
-#if DEBUG_FRAMES
-        printf("Timeout waiting for UA, retrying...\n");
-#endif
     }
 
     closeSerialPort();
@@ -317,27 +247,10 @@ int llOpenRx(LinkLayer llParameters)
         FLAG
     };
 
-#if DEBUG_FRAMES
-    printf("--- Building UA frame ---\n");
-    PRINT_HEX("FLAG", uaFrame[0]);
-    PRINT_HEX("A   ", uaFrame[1]);
-    PRINT_HEX("C   ", uaFrame[2]);
-    PRINT_HEX("BCC ", uaFrame[3]);
-    PRINT_HEX("FLAG", uaFrame[4]);
-#endif
-    dumpFrame("UA (Rx -> Tx)", uaFrame);
-
     // Expected SET frame from transmitter: FLAG | A=0x03 | C=0x03 | BCC=0x03^0x03 | FLAG
     unsigned char expectedA   = A_SENDER;
     unsigned char expectedC   = C_SET;
     unsigned char expectedBcc = expectedA ^ expectedC; // 0x00
-
-#if DEBUG_FRAMES
-    printf("--- Expecting SET frame ---\n");
-    PRINT_HEX("Expected A  ", expectedA);
-    PRINT_HEX("Expected C  ", expectedC);
-    PRINT_HEX("Expected BCC", expectedBcc);
-#endif
 
     while (1)
     {
@@ -352,10 +265,6 @@ int llOpenRx(LinkLayer llParameters)
 
         if (res == 1)
         {
-            // Correct SET received -> answer with UA
-#if DEBUG_FRAMES
-            printf("Valid SET received, sending UA\n");
-#endif
             if (writeAll(uaFrame, 5) < 0)
             {
                 closeSerialPort();

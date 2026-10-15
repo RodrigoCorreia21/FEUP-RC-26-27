@@ -25,6 +25,22 @@
 #define C_SET      0x03
 #define C_UA       0x07
 
+#define ESC          0x7D
+#define ESC_XOR      0x20
+#define C_N0         0x00 // Trama I0
+#define C_N1         0x80 // Trama I1
+#define C_RR0        0xAA // Receiver Ready
+#define C_RR1        0xAB // Receiver Ready 
+#define C_REJ0       0x54 // Reject pacote 0
+#define C_REJ1       0x55 // Reject pacote 1
+#define C_DISC       0x0B // Disconnect
+
+static int txSequenceNumber = 0; // N(s)
+static int rxSequenceNumber = 0; // N(r)
+
+static int timeoutValue = 0;
+static int maxRetransmissions = 0;
+
 // Helper macros for hexadecimal debug printing.
 #if DEBUG_FRAMES
 #define PRINT_HEX(label, var) \
@@ -181,6 +197,9 @@ int llOpenTx(LinkLayer llParameters)
         return -1;
     }
 
+    timeoutValue = llParameters.timeout;
+    maxRetransmissions = llParameters.nRetransmissions;
+
     printf("Serial port %s opened (Tx)\n", llParameters.serialPort);
 
     // SET frame: FLAG | A=0x03 | C=0x03 | BCC=0x03^0x03 | FLAG
@@ -236,6 +255,9 @@ int llOpenRx(LinkLayer llParameters)
         return -1;
     }
 
+    timeoutValue = llParameters.timeout;
+    maxRetransmissions = llParameters.nRetransmissions;
+
     printf("Serial port %s opened (Rx)\n", llParameters.serialPort);
 
     // UA frame to send after correct SET: FLAG | A=0x03 | C=0x07 | BCC=0x03^0x07 | FLAG
@@ -279,14 +301,115 @@ int llOpenRx(LinkLayer llParameters)
     }
 }
 
+static int sendSupervisionFrame(unsigned char a, unsigned char c) {
+    unsigned char frame[5] = {FLAG, a, c, a ^ c, FLAG};
+    return writeAll(frame, 5);
+}
+
+static unsigned char readControlResponse(unsigned char expectedA, int timeoutSec) {
+    int state = 0;
+    unsigned char cField = 0;
+    
+    timeoutOccurred = FALSE;
+    alarm(timeoutSec);
+
+    while (1) {
+        if (timeoutOccurred) {
+            alarm(0);
+            return 0; // Timeout
+        }
+
+        unsigned char byte;
+        int res = readByteSerialPort(&byte);
+        
+        if (res < 0) {
+            if (errno == EINTR) {
+                if (timeoutOccurred) { alarm(0); return 0; }
+                continue;
+            }
+            alarm(0); return -1;
+        }
+        if (res == 0) continue;
+
+        switch (state) {
+            case 0: if (byte == FLAG) state = 1; break;
+            case 1: if (byte == expectedA) state = 2; else if (byte != FLAG) state = 0; break;
+            case 2:
+                if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC) {
+                    cField = byte; state = 3;
+                } else if (byte == FLAG) state = 1; else state = 0; break;
+            case 3:
+                if (byte == (expectedA ^ cField)) state = 4;
+                else if (byte == FLAG) state = 1; else state = 0; break;
+            case 4:
+                if (byte == FLAG) { alarm(0); return cField; }
+                else state = 0; break;
+        }
+    }
+}
+
 ////////////////////////////////////////////////
 // LLSEND
 ////////////////////////////////////////////////
 int llSend(const unsigned char *buf, int bufSize)
 {
-    // TODO: Implement this function
+    unsigned char bcc2 = buf[0];
+    for (int i = 1; i < bufSize; i++) {
+        bcc2 ^= buf[i];
+    }
 
-    return 0;
+    int maxFrameSize = (bufSize * 2) + 6; 
+    unsigned char *frame = (unsigned char *) malloc(maxFrameSize);
+    
+    frame[0] = FLAG;
+    frame[1] = A_SENDER;
+    frame[2] = (txSequenceNumber == 0) ? C_N0 : C_N1;
+    frame[3] = frame[1] ^ frame[2]; 
+
+    int j = 4;
+    for (int i = 0; i < bufSize; i++) {
+        if (buf[i] == FLAG || buf[i] == ESC) {
+            frame[j++] = ESC;
+            frame[j++] = buf[i] ^ ESC_XOR;
+        } else {
+            frame[j++] = buf[i];
+        }
+    }
+
+    if (bcc2 == FLAG || bcc2 == ESC) {
+        frame[j++] = ESC;
+        frame[j++] = bcc2 ^ ESC_XOR;
+    } else {
+        frame[j++] = bcc2;
+    }
+
+    frame[j++] = FLAG; 
+    int frameSize = j;
+
+    unsigned char expectedRR = (txSequenceNumber == 0) ? C_RR1 : C_RR0;
+    unsigned char expectedREJ = (txSequenceNumber == 0) ? C_REJ0 : C_REJ1;
+    
+    int attempt = 0;
+    while (attempt <= maxRetransmissions) {
+        
+        writeAll(frame, frameSize); 
+        
+        unsigned char response = readControlResponse(A_SENDER, timeoutValue);
+
+        if (response == expectedRR) {
+            txSequenceNumber = (txSequenceNumber + 1) % 2; 
+            free(frame);
+            return bufSize; 
+        } 
+        else if (response == expectedREJ) {
+            continue; 
+        }
+        
+        attempt++; // Timeout
+    }
+
+    free(frame);
+    return -1;
 }
 
 ////////////////////////////////////////////////
@@ -294,9 +417,93 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llReceive(unsigned char *packet)
 {
-    // TODO: Implement this function
+    int state = 0; 
+    unsigned char cField = 0;
+    int packetIndex = 0;
 
-    return 0;
+    while (1) {
+        unsigned char byte;
+        int res = readByteSerialPort(&byte);
+        if (res <= 0) continue;
+
+        switch (state) {
+            case 0:
+                if (byte == FLAG) state = 1;
+                break;
+            case 1:
+                if (byte == A_SENDER) state = 2; 
+                else if (byte != FLAG) state = 0;
+                break;
+            case 2:
+                if (byte == C_N0 || byte == C_N1) { 
+                    cField = byte;
+                    state = 3;
+                }
+                else if (byte == FLAG) state = 1;
+                else state = 0;
+                break;
+            case 3:
+                if (byte == (A_SENDER ^ cField)) state = 4; 
+                else if (byte == FLAG) state = 1;
+                else state = 0; 
+                break;
+            case 4:
+                if (byte == FLAG) state = 1; 
+                else if (byte == ESC) state = 6;
+                else {
+                    packet[packetIndex++] = byte;
+                    state = 5;
+                }
+                break;
+            case 5: 
+                if (byte == ESC) {
+                    state = 6; 
+                }
+                else if (byte == FLAG) { 
+                    if (packetIndex < 1) { state = 0; packetIndex = 0; break; }
+                    
+                    int dataSize = packetIndex - 1;
+                    unsigned char receivedBcc2 = packet[dataSize]; 
+                    
+                    unsigned char calcBcc2 = packet[0];
+                    for (int i = 1; i < dataSize; i++) calcBcc2 ^= packet[i];
+
+                    int isDuplicate = ((cField == C_N0 && rxSequenceNumber == 1) || 
+                                       (cField == C_N1 && rxSequenceNumber == 0));
+
+                    if (receivedBcc2 != calcBcc2) {
+                        unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1; 
+                        sendSupervisionFrame(A_SENDER, rejC);
+                        return -1; 
+                    } 
+                    else {
+                        unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0; 
+                        sendSupervisionFrame(A_SENDER, rrC); 
+                        
+                        if (!isDuplicate) {
+                            rxSequenceNumber = (rxSequenceNumber + 1) % 2; 
+                            return dataSize; 
+                        } else {
+                            state = 0;
+                            packetIndex = 0;
+                        }
+                    }
+                }
+                else {
+                    packet[packetIndex++] = byte; 
+                }
+                break;
+            case 6: 
+                state = 5;
+                if (byte == (FLAG ^ ESC_XOR) || byte == (ESC ^ ESC_XOR)) {
+                    packet[packetIndex++] = byte ^ ESC_XOR; 
+                } else {
+                    state = 0; 
+                    packetIndex = 0;
+                }
+                break;
+        }
+    }
 }
 
 ////////////////////////////////////////////////

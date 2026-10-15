@@ -358,7 +358,7 @@ int llSend(const unsigned char *buf, int bufSize)
         bcc2 ^= buf[i];
     }
 
-    int maxFrameSize = (bufSize * 2) + 6; 
+    int maxFrameSize = (bufSize * 2) + 7; 
     unsigned char *frame = (unsigned char *) malloc(maxFrameSize);
     
     frame[0] = FLAG;
@@ -402,6 +402,7 @@ int llSend(const unsigned char *buf, int bufSize)
             return bufSize; 
         } 
         else if (response == expectedREJ) {
+            attempt++;
             continue; 
         }
         
@@ -472,9 +473,19 @@ int llReceive(unsigned char *packet)
                                        (cField == C_N1 && rxSequenceNumber == 0));
 
                     if (receivedBcc2 != calcBcc2) {
-                        unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1; 
-                        sendSupervisionFrame(A_SENDER, rejC);
-                        return -1; 
+                        if (isDuplicate) {
+                            // Duplicate with data error -> confirm with RR
+                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
+                            sendSupervisionFrame(A_SENDER, rrC);
+                        } else {
+                            // New frame with data error -> request retransmission with REJ
+                            unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
+                            sendSupervisionFrame(A_SENDER, rejC);
+                        }
+                        // Reset parser and continue waiting for retransmitted frame
+                        state = 0;
+                        packetIndex = 0;
+                        break;   // exit switch, loop continues
                     } 
                     else {
                         unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0; 

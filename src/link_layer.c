@@ -405,10 +405,12 @@ int llSend(const unsigned char *buf, int bufSize)
             return bufSize; 
         } 
         else if (response == expectedREJ) {
+            printf("\n[WARNING - TX] REJ received (Corrupted data). Retransmitting immediately...\n");
             attempt++;
             continue; 
         }
-        
+
+        printf("\n[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
         attempt++; // Timeout
         statNumTimeouts++;
     }
@@ -477,12 +479,15 @@ int llReceive(unsigned char *packet)
                                        (cField == C_N1 && rxSequenceNumber == 0));
 
                     if (receivedBcc2 != calcBcc2) {
+                        printf("\n[WARNING - RX] Noise detected (BCC2 failed)! ");
                         if (isDuplicate) {
                             // Duplicate with data error -> confirm with RR
+                            printf("Frame is a duplicate. Discarding and sending RR.\n");
                             unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;
                             sendSupervisionFrame(A_SENDER, rrC);
                         } else {
                             // New frame with data error -> request retransmission with REJ
+                            printf("New frame. Discarding and sending REJ to request retransmission.\n");
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
                             statNumRejectsRx++;
@@ -499,6 +504,7 @@ int llReceive(unsigned char *packet)
                             sendSupervisionFrame(A_SENDER, rrC);
                             return dataSize; 
                         } else {
+                            printf("\n[INFO - RX] Perfect duplicate frame received. Sending RR.\n");
                             unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1; 
                             sendSupervisionFrame(A_SENDER, rrC);
                             state = 0;
@@ -598,7 +604,7 @@ int llCloseRx()
             printf("\n--- RECEPTION STATISTICS (Rx) ---\n");
             printf("Rejected frames (REJ sent): %d\n", statNumRejectsRx);
             printf("---------------------------------\n");
-            
+
             closeSerialPort();
             return 0;
         }

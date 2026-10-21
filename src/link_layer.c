@@ -41,6 +41,9 @@ static int rxSequenceNumber = 0; // N(r)
 static int timeoutValue = 0;
 static int maxRetransmissions = 0;
 
+static int statNumTimeouts = 0;
+static int statNumRejectsRx = 0;
+
 // Helper macros for hexadecimal debug printing.
 #if DEBUG_FRAMES
 #define PRINT_HEX(label, var) \
@@ -407,6 +410,7 @@ int llSend(const unsigned char *buf, int bufSize)
         }
         
         attempt++; // Timeout
+        statNumTimeouts++;
     }
 
     free(frame);
@@ -481,6 +485,7 @@ int llReceive(unsigned char *packet)
                             // New frame with data error -> request retransmission with REJ
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
+                            statNumRejectsRx++;
                         }
                         // Reset parser and continue waiting for retransmitted frame
                         state = 0;
@@ -546,6 +551,9 @@ int llCloseTx()
             }
 
             printf("Connection closed (Tx sent UA)\n");
+            printf("\n--- TRANSMISSION STATISTICS (Tx) ---\n");
+            printf("Timeouts occurred: %d\n", statNumTimeouts);
+            printf("------------------------------------\n");
             closeSerialPort();
             return 0;
         }
@@ -587,6 +595,10 @@ int llCloseRx()
         if (uaRes == 1)
         {
             printf("Connection closed (Rx received UA)\n");
+            printf("\n--- RECEPTION STATISTICS (Rx) ---\n");
+            printf("Rejected frames (REJ sent): %d\n", statNumRejectsRx);
+            printf("---------------------------------\n");
+            
             closeSerialPort();
             return 0;
         }

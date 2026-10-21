@@ -83,7 +83,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
             if (llSend(dataPacket, bytesRead + 4) < 0) {
                 printf("\n[ERROR]: Failed to send DATA packet %d.\n", seqNum);
-                break;
+                fclose(file);
+                llCloseTx();
+                return;
             }
             seqNum = (seqNum + 1) % 256; 
             currentBytes += bytesRead;

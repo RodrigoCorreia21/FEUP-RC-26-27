@@ -461,7 +461,7 @@ int llReceive(unsigned char *packet)
                     state = 6; 
                 }
                 else if (byte == FLAG) { 
-                    if (packetIndex < 1) { state = 0; packetIndex = 0; break; }
+                    if (packetIndex < 2) { state = 1; packetIndex = 0; break; }
                     
                     int dataSize = packetIndex - 1;
                     unsigned char receivedBcc2 = packet[dataSize]; 
@@ -475,7 +475,7 @@ int llReceive(unsigned char *packet)
                     if (receivedBcc2 != calcBcc2) {
                         if (isDuplicate) {
                             // Duplicate with data error -> confirm with RR
-                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
+                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;
                             sendSupervisionFrame(A_SENDER, rrC);
                         } else {
                             // New frame with data error -> request retransmission with REJ
@@ -487,14 +487,15 @@ int llReceive(unsigned char *packet)
                         packetIndex = 0;
                         break;   // exit switch, loop continues
                     } 
-                    else {
-                        unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0; 
-                        sendSupervisionFrame(A_SENDER, rrC); 
-                        
+                    else {            
                         if (!isDuplicate) {
                             rxSequenceNumber = (rxSequenceNumber + 1) % 2; 
+                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1; 
+                            sendSupervisionFrame(A_SENDER, rrC);
                             return dataSize; 
                         } else {
+                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1; 
+                            sendSupervisionFrame(A_SENDER, rrC);
                             state = 0;
                             packetIndex = 0;
                         }
@@ -522,16 +523,81 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // TODO: Implement this function
-    // Remember to call closeSerialPort() here when the connection ends.
+    unsigned char expectedA   = A_RECEIVER;
+    unsigned char expectedC   = C_DISC;
+    unsigned char expectedBcc = expectedA ^ expectedC;
 
-    return 0;
+    for (int attempt = 0; attempt <= maxRetransmissions; attempt++)
+    {
+        if (sendSupervisionFrame(A_SENDER, C_DISC) < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+
+        int res = waitForFrame(expectedA, expectedC, expectedBcc, timeoutValue);
+
+        if (res == 1)
+        {
+            if (sendSupervisionFrame(A_RECEIVER, C_UA) < 0)
+            {
+                closeSerialPort();
+                return -1;
+            }
+
+            printf("Connection closed (Tx sent UA)\n");
+            closeSerialPort();
+            return 0;
+        }
+
+        if (res < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+    }
+
+    closeSerialPort();
+    return -1;
 }
 
 int llCloseRx()
 {
-    // TODO: Implement this function
-    // Remember to call closeSerialPort() here when the connection ends.
+    int res = waitForFrame(A_SENDER, C_DISC, A_SENDER ^ C_DISC, 0);
+    if (res < 0)
+    {
+        closeSerialPort();
+        return -1;
+    }
 
-    return 0;
+    unsigned char expectedA   = A_RECEIVER;
+    unsigned char expectedC   = C_UA;
+    unsigned char expectedBcc = expectedA ^ expectedC;
+
+    for (int attempt = 0; attempt <= maxRetransmissions; attempt++)
+    {
+        if (sendSupervisionFrame(A_RECEIVER, C_DISC) < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+
+        int uaRes = waitForFrame(expectedA, expectedC, expectedBcc, timeoutValue);
+
+        if (uaRes == 1)
+        {
+            printf("Connection closed (Rx received UA)\n");
+            closeSerialPort();
+            return 0;
+        }
+
+        if (uaRes < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+    }
+
+    closeSerialPort();
+    return -1;
 }

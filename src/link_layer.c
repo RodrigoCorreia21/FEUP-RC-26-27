@@ -13,10 +13,6 @@
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
-#define BUF_SIZE 256
-
-// Debug flag: set to 1 to enable verbose frame dumps, 0 to disable
-#define DEBUG_FRAMES 1
 
 // Supervision frame fields
 #define FLAG       0x7E
@@ -200,7 +196,10 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
             break;
 
         case STATE_BCC_OK:
-            if (byte == FLAG) return 1; // STOP
+            if (byte == FLAG) {
+                if (useAlarm) alarm(0);   // NEW: cancel pending alarm
+                return 1;                  // STOP
+            }
             state = STATE_START;
             break;
         }
@@ -330,7 +329,7 @@ static int sendSupervisionFrame(unsigned char a, unsigned char c) {
     return writeAll(frame, 5);
 }
 
-static unsigned char readControlResponse(unsigned char expectedA, int timeoutSec) {
+static int readControlResponse(unsigned char expectedA, int timeoutSec) {
     int state = 0;
     unsigned char cField = 0;
     
@@ -375,8 +374,12 @@ static unsigned char readControlResponse(unsigned char expectedA, int timeoutSec
 ////////////////////////////////////////////////
 // LLSEND
 ////////////////////////////////////////////////
-int llSend(const unsigned char *buf, int bufSize)
-{
+int llSend(const unsigned char *buf, int bufSize) {
+
+    if (buf == NULL || bufSize <= 0) {
+        return -1;
+    }
+
     unsigned char bcc2 = buf[0];
     for (int i = 1; i < bufSize; i++) {
         bcc2 ^= buf[i];
@@ -424,7 +427,7 @@ int llSend(const unsigned char *buf, int bufSize)
         if (attempt == 0) statIFramesSent++;
         else              statIFramesRetransmitted++;
 
-        unsigned char response = readControlResponse(A_SENDER, timeoutValue);
+        int response = readControlResponse(A_SENDER, timeoutValue);
 
         if (response == expectedRR) {
             statRRReceived++;
@@ -564,7 +567,7 @@ int llCloseTx()
     // Then send UA (reply from Tx: A=0x01, C=0x07)
 
     int attempt = 0;
-    unsigned char response = 0;
+    int response = 0;
 
     while (attempt <= maxRetransmissions) {
         // Send DISC
@@ -575,6 +578,12 @@ int llCloseTx()
 
         // Wait for DISC from Rx
         response = readControlResponse(A_RECEIVER, timeoutValue);
+        
+        if (response < 0) {
+            printStatistics();
+            closeSerialPort();
+            return -1;
+        }
 
         if (response == C_DISC) {
             // Received DISC from Rx. Now send UA (reply from Tx)
@@ -601,7 +610,7 @@ int llCloseTx()
 int llCloseRx()
 {
     // Wait for DISC from Tx (command from Tx: A=0x03, C=0x0B)
-    unsigned char response = 0;
+    int response = 0;
 
     // Wait indefinitely for DISC (like llOpenRx)
     while (1) {

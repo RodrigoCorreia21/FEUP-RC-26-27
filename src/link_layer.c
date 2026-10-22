@@ -13,10 +13,6 @@
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
-#define BUF_SIZE 256
-
-// Debug flag: set to 1 to enable verbose frame dumps, 0 to disable
-#define DEBUG_FRAMES 1
 
 // Supervision frame fields
 #define FLAG       0x7E
@@ -200,7 +196,10 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
             break;
 
         case STATE_BCC_OK:
-            if (byte == FLAG) return 1; // STOP
+            if (byte == FLAG) {
+                if (useAlarm) alarm(0);   // NEW: cancel pending alarm
+                return 1;                  // STOP
+            }
             state = STATE_START;
             break;
         }
@@ -375,8 +374,12 @@ static int readControlResponse(unsigned char expectedA, int timeoutSec) {
 ////////////////////////////////////////////////
 // LLSEND
 ////////////////////////////////////////////////
-int llSend(const unsigned char *buf, int bufSize)
-{
+int llSend(const unsigned char *buf, int bufSize) {
+
+    if (buf == NULL || bufSize <= 0) {
+        return -1;
+    }
+
     unsigned char bcc2 = buf[0];
     for (int i = 1; i < bufSize; i++) {
         bcc2 ^= buf[i];

@@ -442,7 +442,11 @@ int llSend(const unsigned char *buf, int bufSize) {
             continue;
         }
 
-        if (response == 0) statTimeouts++;
+        if (response == 0){
+            printf("\n[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...", attempt + 1, maxRetransmissions);
+            statTimeouts++;
+        } 
+
         attempt++;
     }
 

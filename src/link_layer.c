@@ -358,7 +358,7 @@ static int readControlResponse(unsigned char expectedA, int timeoutSec) {
             case 0: if (byte == FLAG) state = 1; break;
             case 1: if (byte == expectedA) state = 2; else if (byte != FLAG) state = 0; break;
             case 2:
-                if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC) {
+                if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC || byte == C_UA) {
                     cField = byte; state = 3;
                 } else if (byte == FLAG) state = 1; else state = 0; break;
             case 3:

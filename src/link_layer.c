@@ -41,13 +41,37 @@ static int rxSequenceNumber = 0; // N(r)
 static int timeoutValue = 0;
 static int maxRetransmissions = 0;
 
-// Helper macros for hexadecimal debug printing.
-#if DEBUG_FRAMES
-#define PRINT_HEX(label, var) \
-    printf("%s = 0x%02X\n", label, (unsigned int)((var) & 0xFF))
-#else
-#define PRINT_HEX(label, var) ((void)0)
-#endif
+// ---------------------------------------------------------------------------
+// Protocol statistics
+// ---------------------------------------------------------------------------
+static int statIFramesSent          = 0;
+static int statIFramesRetransmitted = 0;
+static int statIFramesReceived      = 0;
+static int statIFramesDuplicate     = 0;
+static int statRRSent               = 0;
+static int statRRReceived           = 0;
+static int statREJSent              = 0;
+static int statREJReceived          = 0;
+static int statTimeouts             = 0;
+static int statBytesSent            = 0;
+static int statBytesReceived        = 0;
+
+static void printStatistics(void)
+{
+    printf("\n===== Protocol Statistics =====\n");
+    printf("I frames sent:            %d\n", statIFramesSent);
+    printf("I frames retransmitted:   %d\n", statIFramesRetransmitted);
+    printf("I frames received:        %d\n", statIFramesReceived);
+    printf("I frames duplicate:       %d\n", statIFramesDuplicate);
+    printf("RR frames sent:           %d\n", statRRSent);
+    printf("RR frames received:       %d\n", statRRReceived);
+    printf("REJ frames sent:          %d\n", statREJSent);
+    printf("REJ frames received:      %d\n", statREJReceived);
+    printf("Timeouts:                 %d\n", statTimeouts);
+    printf("Payload bytes sent:       %d\n", statBytesSent);
+    printf("Payload bytes received:   %d\n", statBytesReceived);
+    printf("===============================\n\n");
+}
 
 // ---------------------------------------------------------------------------
 // Alarm handling for retransmission timeout (Lab 2)
@@ -391,22 +415,32 @@ int llSend(const unsigned char *buf, int bufSize)
     
     int attempt = 0;
     while (attempt <= maxRetransmissions) {
-        
-        writeAll(frame, frameSize); 
-        
+
+        if (writeAll(frame, frameSize) < 0) {
+            free(frame);
+            return -1;
+        }
+
+        if (attempt == 0) statIFramesSent++;
+        else              statIFramesRetransmitted++;
+
         unsigned char response = readControlResponse(A_SENDER, timeoutValue);
 
         if (response == expectedRR) {
-            txSequenceNumber = (txSequenceNumber + 1) % 2; 
+            statRRReceived++;
+            statBytesSent += bufSize;
+            txSequenceNumber = (txSequenceNumber + 1) % 2;
             free(frame);
-            return bufSize; 
-        } 
-        else if (response == expectedREJ) {
-            attempt++;
-            continue; 
+            return bufSize;
         }
-        
-        attempt++; // Timeout
+        else if (response == expectedREJ) {
+            statREJReceived++;
+            attempt++;
+            continue;
+        }
+
+        if (response == 0) statTimeouts++;
+        attempt++;
     }
 
     free(frame);
@@ -456,52 +490,55 @@ int llReceive(unsigned char *packet)
                     state = 5;
                 }
                 break;
-            case 5: 
+                        case 5:
                 if (byte == ESC) {
-                    state = 6; 
+                    state = 6;
                 }
-                else if (byte == FLAG) { 
+                else if (byte == FLAG) {
                     if (packetIndex < 1) { state = 0; packetIndex = 0; break; }
-                    
+
                     int dataSize = packetIndex - 1;
-                    unsigned char receivedBcc2 = packet[dataSize]; 
-                    
+                    unsigned char receivedBcc2 = packet[dataSize];
+
                     unsigned char calcBcc2 = packet[0];
                     for (int i = 1; i < dataSize; i++) calcBcc2 ^= packet[i];
 
-                    int isDuplicate = ((cField == C_N0 && rxSequenceNumber == 1) || 
+                    int isDuplicate = ((cField == C_N0 && rxSequenceNumber == 1) ||
                                        (cField == C_N1 && rxSequenceNumber == 0));
 
                     if (receivedBcc2 != calcBcc2) {
                         if (isDuplicate) {
-                            // Duplicate with data error -> confirm with RR
                             unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
                             sendSupervisionFrame(A_SENDER, rrC);
+                            statRRSent++;                       // NEW
                         } else {
-                            // New frame with data error -> request retransmission with REJ
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
+                            statREJSent++;                      // NEW
                         }
-                        // Reset parser and continue waiting for retransmitted frame
                         state = 0;
                         packetIndex = 0;
-                        break;   // exit switch, loop continues
-                    } 
+                        break;
+                    }
                     else {
-                        unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0; 
-                        sendSupervisionFrame(A_SENDER, rrC); 
-                        
+                        unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
+                        sendSupervisionFrame(A_SENDER, rrC);
+                        statRRSent++;                               // NEW
+
                         if (!isDuplicate) {
-                            rxSequenceNumber = (rxSequenceNumber + 1) % 2; 
-                            return dataSize; 
+                            rxSequenceNumber = (rxSequenceNumber + 1) % 2;
+                            statIFramesReceived++;                  // NEW
+                            statBytesReceived += dataSize;          // NEW
+                            return dataSize;
                         } else {
+                            statIFramesDuplicate++;                 // NEW
                             state = 0;
                             packetIndex = 0;
                         }
                     }
                 }
                 else {
-                    packet[packetIndex++] = byte; 
+                    packet[packetIndex++] = byte;
                 }
                 break;
             case 6: 
@@ -522,16 +559,80 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // TODO: Implement this function
-    // Remember to call closeSerialPort() here when the connection ends.
+    // Send DISC (command from Tx: A=0x03, C=0x0B)
+    // Expect DISC from Rx (command from Rx: A=0x01, C=0x0B)
+    // Then send UA (reply from Tx: A=0x01, C=0x07)
 
-    return 0;
+    int attempt = 0;
+    unsigned char response = 0;
+
+    while (attempt <= maxRetransmissions) {
+        // Send DISC
+        if (sendSupervisionFrame(A_SENDER, C_DISC) < 0) {
+            closeSerialPort();
+            return -1;
+        }
+
+        // Wait for DISC from Rx
+        response = readControlResponse(A_RECEIVER, timeoutValue);
+
+        if (response == C_DISC) {
+            // Received DISC from Rx. Now send UA (reply from Tx)
+            if (sendSupervisionFrame(A_RECEIVER, C_UA) < 0) {
+                printStatistics();
+                closeSerialPort();
+                return -1;
+            }
+            printStatistics();
+            closeSerialPort();
+            return 0;
+        }
+
+        // On timeout or wrong response, retransmit DISC
+        attempt++;
+    }
+
+    // Exceeded retries
+    printStatistics();
+    closeSerialPort();
+    return -1;
 }
 
 int llCloseRx()
 {
-    // TODO: Implement this function
-    // Remember to call closeSerialPort() here when the connection ends.
+    // Wait for DISC from Tx (command from Tx: A=0x03, C=0x0B)
+    unsigned char response = 0;
 
-    return 0;
+    // Wait indefinitely for DISC (like llOpenRx)
+    while (1) {
+        response = readControlResponse(A_SENDER, 0); // 0 = no timeout
+        if (response == C_DISC) {
+            break;
+        }
+        if (response < 0) {
+            printStatistics();
+            closeSerialPort();
+            return -1;
+        }
+        // Ignore other frames and keep waiting
+    }
+
+    // Received DISC from Tx. Send DISC back (command from Rx: A=0x01, C=0x0B)
+    if (sendSupervisionFrame(A_RECEIVER, C_DISC) < 0) {
+        printStatistics();
+        closeSerialPort();
+        return -1;
+    }
+
+    // Wait for UA from Tx (reply from Tx: A=0x01, C=0x07)
+    response = readControlResponse(A_RECEIVER, timeoutValue);
+    printStatistics();
+    if (response == C_UA) {
+        closeSerialPort();
+        return 0;
+    }
+
+    // Timeout or error waiting for UA
+    closeSerialPort();
+    return -1;
 }

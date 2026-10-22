@@ -68,7 +68,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         unsigned char dataBuf[MAX_PAYLOAD_SIZE - 4];
         unsigned char dataPacket[MAX_PAYLOAD_SIZE];
         int bytesRead;
-        unsigned char seqNum = 0;
         long int currentBytes = 0; // For the progress bar
 
         printf("\n[Tx] Starting data transfer...\n");
@@ -76,18 +75,15 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         while ((bytesRead = fread(dataBuf, 1, sizeof(dataBuf), file)) > 0)
         {
             dataPacket[0] = 2; // C = 2 (DATA)
-            dataPacket[1] = seqNum; // N
-            dataPacket[2] = bytesRead / 256; // L2
-            dataPacket[3] = bytesRead % 256; // L1
-            memcpy(&dataPacket[4], dataBuf, bytesRead); 
+            dataPacket[1] = bytesRead / 256; // L2
+            dataPacket[2] = bytesRead % 256; // L1
+            memcpy(&dataPacket[3], dataBuf, bytesRead); 
 
-            if (llSend(dataPacket, bytesRead + 4) < 0) {
-                printf("\n[ERROR]: Failed to send DATA packet %d.\n", seqNum);
+            if (llSend(dataPacket, bytesRead + 3) < 0) {
                 fclose(file);
                 llCloseTx();
                 return;
             }
-            seqNum = (seqNum + 1) % 256; 
             currentBytes += bytesRead;
 
             // PROGRESS BAR (TX)
@@ -148,8 +144,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             else if (c == 2) { 
                 if (file == NULL) continue;
                 
-                int k = 256 * packet[2] + packet[3];
-                fwrite(&packet[4], 1, k, file);
+                int k = 256 * packet[1] + packet[2];
+                fwrite(&packet[3], 1, k, file);
 
                 currentBytes += k;
 

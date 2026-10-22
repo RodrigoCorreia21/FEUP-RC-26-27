@@ -443,7 +443,7 @@ int llSend(const unsigned char *buf, int bufSize) {
         }
 
         if (response == 0){
-            printf("\n[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...", attempt + 1, maxRetransmissions);
+            printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
             statTimeouts++;
         } 
 
@@ -493,11 +493,16 @@ int llReceive(unsigned char *packet)
                 if (byte == FLAG) state = 1; 
                 else if (byte == ESC) state = 6;
                 else {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte;
                     state = 5;
                 }
                 break;
-                        case 5:
+            case 5:
                 if (byte == ESC) {
                     state = 6;
                 }
@@ -545,12 +550,22 @@ int llReceive(unsigned char *packet)
                     }
                 }
                 else {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte;
                 }
                 break;
             case 6: 
                 state = 5;
                 if (byte == (FLAG ^ ESC_XOR) || byte == (ESC ^ ESC_XOR)) {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte ^ ESC_XOR; 
                 } else {
                     state = 0; 

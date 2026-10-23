@@ -355,18 +355,39 @@ static int readControlResponse(unsigned char expectedA, int timeoutSec) {
         if (res == 0) continue;
 
         switch (state) {
-            case 0: if (byte == FLAG) state = 1; break;
-            case 1: if (byte == expectedA) state = 2; else if (byte != FLAG) state = 0; break;
+            case 0: 
+                if (byte == FLAG) state = 1; 
+                break;
+            case 1: 
+                if (byte == expectedA) state = 2; 
+                else if (byte != FLAG) state = 0; 
+                break;
             case 2:
                 if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC || byte == C_UA) {
-                    cField = byte; state = 3;
-                } else if (byte == FLAG) state = 1; else state = 0; break;
+                    cField = byte; 
+                    state = 3;
+                } else if (byte == FLAG) { 
+                    state = 1; 
+                } else {
+                    state = 0; 
+                }
+                break;
             case 3:
-                if (byte == (expectedA ^ cField)) state = 4;
-                else if (byte == FLAG) state = 1; else state = 0; break;
+                if (byte == (expectedA ^ cField)){
+                    state = 4;
+                } 
+                else if (byte == FLAG) {
+                     state = 1; 
+                } else {
+                    state = 0; 
+                } break;
             case 4:
-                if (byte == FLAG) { alarm(0); return cField; }
-                else {state = 0;} 
+                if (byte == FLAG) { 
+                    alarm(0); 
+                    return cField; 
+                } else {
+                    state = 0;
+                } 
                 break;
         }
     }

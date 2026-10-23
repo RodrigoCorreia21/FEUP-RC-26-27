@@ -366,7 +366,8 @@ static int readControlResponse(unsigned char expectedA, int timeoutSec) {
                 else if (byte == FLAG) state = 1; else state = 0; break;
             case 4:
                 if (byte == FLAG) { alarm(0); return cField; }
-                else state = 0; break;
+                else {state = 0;} 
+                break;
         }
     }
 }
@@ -437,6 +438,7 @@ int llSend(const unsigned char *buf, int bufSize) {
             return bufSize;
         }
         else if (response == expectedREJ) {
+            printf("\n[WARNING - TX] REJ received! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
             statREJReceived++;
             attempt++;
             continue;
@@ -524,6 +526,7 @@ int llReceive(unsigned char *packet)
                             sendSupervisionFrame(A_SENDER, rrC);
                             statRRSent++;                       // NEW
                         } else {
+                            printf("\r\033[K[WARNING - RX] Corrupted BCC2 detected! Sending REJ...\n");
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
                             statREJSent++;                      // NEW

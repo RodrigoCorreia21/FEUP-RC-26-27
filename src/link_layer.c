@@ -355,18 +355,40 @@ static int readControlResponse(unsigned char expectedA, int timeoutSec) {
         if (res == 0) continue;
 
         switch (state) {
-            case 0: if (byte == FLAG) state = 1; break;
-            case 1: if (byte == expectedA) state = 2; else if (byte != FLAG) state = 0; break;
+            case 0: 
+                if (byte == FLAG) state = 1; 
+                break;
+            case 1: 
+                if (byte == expectedA) state = 2; 
+                else if (byte != FLAG) state = 0; 
+                break;
             case 2:
-                if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC) {
-                    cField = byte; state = 3;
-                } else if (byte == FLAG) state = 1; else state = 0; break;
+                if (byte == C_RR0 || byte == C_RR1 || byte == C_REJ0 || byte == C_REJ1 || byte == C_DISC || byte == C_UA) {
+                    cField = byte; 
+                    state = 3;
+                } else if (byte == FLAG) { 
+                    state = 1; 
+                } else {
+                    state = 0; 
+                }
+                break;
             case 3:
-                if (byte == (expectedA ^ cField)) state = 4;
-                else if (byte == FLAG) state = 1; else state = 0; break;
+                if (byte == (expectedA ^ cField)){
+                    state = 4;
+                } 
+                else if (byte == FLAG) {
+                     state = 1; 
+                } else {
+                    state = 0; 
+                } break;
             case 4:
-                if (byte == FLAG) { alarm(0); return cField; }
-                else state = 0; break;
+                if (byte == FLAG) { 
+                    alarm(0); 
+                    return cField; 
+                } else {
+                    state = 0;
+                } 
+                break;
         }
     }
 }
@@ -437,12 +459,17 @@ int llSend(const unsigned char *buf, int bufSize) {
             return bufSize;
         }
         else if (response == expectedREJ) {
+            printf("\n[WARNING - TX] REJ received! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
             statREJReceived++;
             attempt++;
             continue;
         }
 
-        if (response == 0) statTimeouts++;
+        if (response == 0){
+            printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+            statTimeouts++;
+        } 
+
         attempt++;
     }
 
@@ -489,11 +516,16 @@ int llReceive(unsigned char *packet)
                 if (byte == FLAG) state = 1; 
                 else if (byte == ESC) state = 6;
                 else {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte;
                     state = 5;
                 }
                 break;
-                        case 5:
+            case 5:
                 if (byte == ESC) {
                     state = 6;
                 }
@@ -515,6 +547,7 @@ int llReceive(unsigned char *packet)
                             sendSupervisionFrame(A_SENDER, rrC);
                             statRRSent++;                       // NEW
                         } else {
+                            printf("\r\033[K[WARNING - RX] Corrupted BCC2 detected! Sending REJ...\n");
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
                             statREJSent++;                      // NEW
@@ -541,12 +574,22 @@ int llReceive(unsigned char *packet)
                     }
                 }
                 else {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte;
                 }
                 break;
             case 6: 
                 state = 5;
                 if (byte == (FLAG ^ ESC_XOR) || byte == (ESC ^ ESC_XOR)) {
+                    if (packetIndex > MAX_PAYLOAD_SIZE) {
+                        state = 0;
+                        packetIndex = 0;
+                        break;
+                    }
                     packet[packetIndex++] = byte ^ ESC_XOR; 
                 } else {
                     state = 0; 

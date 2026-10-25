@@ -326,6 +326,13 @@ int llOpenRx(LinkLayer llParameters)
 
 static int sendSupervisionFrame(unsigned char a, unsigned char c) {
     unsigned char frame[5] = {FLAG, a, c, a ^ c, FLAG};
+
+    // Print RR/REJ frames
+    if (c == C_RR0)      printf("\r\033[K[Rx] -> RR0\n");
+    else if (c == C_RR1) printf("\r\033[K[Rx] -> RR1\n");
+    else if (c == C_REJ0) printf("\r\033[K[Rx] -> REJ0\n");
+    else if (c == C_REJ1) printf("\r\033[K[Rx] -> REJ1\n");
+
     return writeAll(frame, 5);
 }
 
@@ -459,7 +466,9 @@ int llSend(const unsigned char *buf, int bufSize) {
             return bufSize;
         }
         else if (response == expectedREJ) {
-            printf("\n[WARNING - TX] REJ received! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+            if (attempt < maxRetransmissions) {
+                printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+            }
             statREJReceived++;
             attempt++;
             continue;

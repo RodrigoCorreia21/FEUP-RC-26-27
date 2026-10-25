@@ -467,7 +467,7 @@ int llSend(const unsigned char *buf, int bufSize) {
         }
         else if (response == expectedREJ) {
             if (attempt < maxRetransmissions) {
-                printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+                printf("\r\033[K[WARNING - TX] REJ received! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
             }
             statREJReceived++;
             attempt++;
@@ -475,7 +475,9 @@ int llSend(const unsigned char *buf, int bufSize) {
         }
 
         if (response == 0){
-            printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+            if (attempt < maxRetransmissions) {
+                printf("\r\033[K[WARNING - TX] Timeout! Retransmitting frame (attempt %d of %d)...\n", attempt + 1, maxRetransmissions);
+            }
             statTimeouts++;
         } 
 

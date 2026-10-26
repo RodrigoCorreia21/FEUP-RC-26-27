@@ -554,21 +554,26 @@ int llReceive(unsigned char *packet)
 
                     if (receivedBcc2 != calcBcc2) {
                         if (isDuplicate) {
-                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
+                            unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;
                             sendSupervisionFrame(A_SENDER, rrC);
-                            statRRSent++;                       // NEW
+                            statRRSent++;
                         } else {
                             printf("\r\033[K[WARNING - RX] Corrupted BCC2 detected! Sending REJ...\n");
                             unsigned char rejC = (rxSequenceNumber == 0) ? C_REJ0 : C_REJ1;
                             sendSupervisionFrame(A_SENDER, rejC);
-                            statREJSent++;                      // NEW
+                            statREJSent++;
                         }
                         state = 0;
                         packetIndex = 0;
                         break;
                     }
                     else {
-                        unsigned char rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;
+                        unsigned char rrC;
+                        if (isDuplicate) {
+                            rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;   // N(r) = rxSequenceNumber
+                        } else {
+                            rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;   // N(r) = (rxSequenceNumber + 1) mod 2
+                        }
                         sendSupervisionFrame(A_SENDER, rrC);
                         statRRSent++;                               // NEW
 

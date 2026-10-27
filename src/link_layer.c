@@ -27,8 +27,8 @@
 #define C_N1         0x80 // Trama I1
 #define C_RR0        0xAA // Receiver Ready
 #define C_RR1        0xAB // Receiver Ready 
-#define C_REJ0       0x54 // Reject pacote 0
-#define C_REJ1       0x55 // Reject pacote 1
+#define C_REJ0       0x54 // Reject packet 0
+#define C_REJ1       0x55 // Reject packet 1
 #define C_DISC       0x0B // Disconnect
 
 static int txSequenceNumber = 0; // N(s)
@@ -70,7 +70,7 @@ static void printStatistics(void)
 }
 
 // ---------------------------------------------------------------------------
-// Alarm handling for retransmission timeout (Lab 2)
+// Alarm handling for retransmission timeout
 // ---------------------------------------------------------------------------
 static volatile sig_atomic_t alarmCount = 0;
 static volatile sig_atomic_t timeoutOccurred = FALSE;
@@ -168,7 +168,7 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
         }
 
         if (res == 0)
-            continue; // no byte (should not happen with VMIN=1)
+            continue; // no byte
 
         // State machine
         switch (state)
@@ -197,8 +197,8 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
 
         case STATE_BCC_OK:
             if (byte == FLAG) {
-                if (useAlarm) alarm(0);   // NEW: cancel pending alarm
-                return 1;                  // STOP
+                if (useAlarm) alarm(0);
+                return 1;
             }
             state = STATE_START;
             break;
@@ -319,8 +319,6 @@ int llOpenRx(LinkLayer llParameters)
             printf("Connection established (Rx sent UA)\n");
             return 0;
         }
-
-        // res == 0 cannot happen because timeout is 0
     }
 }
 
@@ -575,15 +573,15 @@ int llReceive(unsigned char *packet)
                             rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;   // N(r) = (rxSequenceNumber + 1) mod 2
                         }
                         sendSupervisionFrame(A_SENDER, rrC);
-                        statRRSent++;                               // NEW
+                        statRRSent++;
 
                         if (!isDuplicate) {
                             rxSequenceNumber = (rxSequenceNumber + 1) % 2;
-                            statIFramesReceived++;                  // NEW
-                            statBytesReceived += dataSize;          // NEW
+                            statIFramesReceived++;
+                            statBytesReceived += dataSize;
                             return dataSize;
                         } else {
-                            statIFramesDuplicate++;                 // NEW
+                            statIFramesDuplicate++;
                             state = 0;
                             packetIndex = 0;
                         }
@@ -645,7 +643,7 @@ int llCloseTx()
         }
 
         if (response == C_DISC) {
-            // Received DISC from Rx. Now send UA (reply from Tx)
+            // Received DISC from Rx. Now send UA
             if (sendSupervisionFrame(A_RECEIVER, C_UA) < 0) {
                 printStatistics();
                 closeSerialPort();
@@ -668,12 +666,12 @@ int llCloseTx()
 
 int llCloseRx()
 {
-    // Wait for DISC from Tx (command from Tx: A=0x03, C=0x0B)
+    // Wait for DISC from Tx
     int response = 0;
 
-    // Wait indefinitely for DISC (like llOpenRx)
+    // Wait indefinitely for DISC
     while (1) {
-        response = readControlResponse(A_SENDER, 0); // 0 = no timeout
+        response = readControlResponse(A_SENDER, 0);
         if (response == C_DISC) {
             break;
         }
@@ -682,17 +680,16 @@ int llCloseRx()
             closeSerialPort();
             return -1;
         }
-        // Ignore other frames and keep waiting
     }
 
-    // Received DISC from Tx. Send DISC back (command from Rx: A=0x01, C=0x0B)
+    // Received DISC from Tx. Send DISC back
     if (sendSupervisionFrame(A_RECEIVER, C_DISC) < 0) {
         printStatistics();
         closeSerialPort();
         return -1;
     }
 
-    // Wait for UA from Tx (reply from Tx: A=0x01, C=0x07)
+    // Wait for UA from Tx
     response = readControlResponse(A_RECEIVER, timeoutValue);
     printStatistics();
     if (response == C_UA) {

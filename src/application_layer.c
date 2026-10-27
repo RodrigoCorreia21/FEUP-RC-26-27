@@ -12,10 +12,6 @@
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {
-    // ----------------------------------------------------
-    // TODO: Adapt and extend this code according to the specifications of the project.
-    // ----------------------------------------------------
-
     LinkLayer llParameters = {
         .baudRate = baudRate,
         .nRetransmissions = nTries,
@@ -134,7 +130,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                     printf("[ERROR] Could not create file %s\n", filename);
                     break;
                 }
-                // Extract file size (assuming the first parameter T=0 is the size)
+                // Extract file size
                 if (packet[1] == 0 && packet[2] == sizeof(long int)) {
                     memcpy(&fileSize, &packet[3], sizeof(long int));
                 }

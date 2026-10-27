@@ -1,4 +1,5 @@
 // RCOM 2026/2027
+// Work by: Lara Henriques up202405711 | Rodrigo Correia up202405057
 //
 // Link layer protocol implementation
 

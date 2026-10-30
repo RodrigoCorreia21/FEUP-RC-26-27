@@ -3,6 +3,8 @@
 //
 // Application layer protocol implementation
 
+#include <time.h>
+
 #include "application_layer.h"
 #include "link_layer.h"
 
@@ -55,6 +57,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         memcpy(&startPacket[pos], filename, nameLen); // V
         pos += nameLen;
 
+        struct timespec startTime, endTime;
+        clock_gettime(CLOCK_MONOTONIC, &startTime);
+
         if (llSend(startPacket, pos) < 0) {
             printf("[ERROR]: Failed to send START packet.\n");
             fclose(file);
@@ -96,6 +101,18 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         memcpy(&endPacket[1], &startPacket[1], pos - 1); 
         
         llSend(endPacket, pos);
+
+        clock_gettime(CLOCK_MONOTONIC, &endTime);
+        double transferTime = (endTime.tv_sec - startTime.tv_sec) +
+                      (endTime.tv_nsec - startTime.tv_nsec) / 1e9;
+        double throughput = (fileSize * 8.0) / transferTime;
+        double efficiency = (throughput / baudRate) * 100.0;
+
+        printf("\n===== Efficiency Metrics =====\n");
+        printf("Transfer time (s):        %.6f\n", transferTime);
+        printf("Throughput R (bits/s):    %.2f\n", throughput);
+        printf("Efficiency S_exp (%%):     %.2f%%\n", efficiency);
+        printf("==============================\n");
 
         fclose(file);
 

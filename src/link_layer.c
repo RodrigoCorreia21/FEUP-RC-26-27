@@ -32,6 +32,8 @@
 #define C_REJ1       0x55 // Reject packet 1
 #define C_DISC       0x0B // Disconnect
 
+#define TEST_FER 0 // Percentagem de erro nas tramas I (0, 10, 20, 30, 40, 50)
+
 static int txSequenceNumber = 0; // N(s)
 static int rxSequenceNumber = 0; // N(r)
 
@@ -551,7 +553,8 @@ int llReceive(unsigned char *packet)
                     int isDuplicate = ((cField == C_N0 && rxSequenceNumber == 1) ||
                                        (cField == C_N1 && rxSequenceNumber == 0));
 
-                    if (receivedBcc2 != calcBcc2) {
+                    int simulatedError = (!isDuplicate && (rand() % 100 < TEST_FER));
+                    if (receivedBcc2 != calcBcc2 || simulatedError) {
                         if (isDuplicate) {
                             unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;
                             sendSupervisionFrame(A_SENDER, rrC);

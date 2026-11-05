@@ -35,24 +35,26 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             return;
         }
 
+        // Check size of file
         fseek(file, 0, SEEK_END);
         long int fileSize = ftell(file);
         fseek(file, 0, SEEK_SET);
 
+        // Control Packet START
         unsigned char startPacket[MAX_PAYLOAD_SIZE];
         startPacket[0] = 1; // C = 1 (START)
         
-        //(T = 0)
-        startPacket[1] = 0; 
-        startPacket[2] = sizeof(long int); // L
-        memcpy(&startPacket[3], &fileSize, sizeof(long int)); // V
+        //(T = 1)
+        startPacket[1] = 0;                                   // File size
+        startPacket[2] = sizeof(long int);                    // L1
+        memcpy(&startPacket[3], &fileSize, sizeof(long int)); // V1
         int pos = 3 + sizeof(long int);
         
-        //(T = 1)
-        startPacket[pos++] = 1; 
+        //(T = 2)
+        startPacket[pos++] = 1;                       // File name
         int nameLen = strlen(filename);
-        startPacket[pos++] = nameLen; // L
-        memcpy(&startPacket[pos], filename, nameLen); // V
+        startPacket[pos++] = nameLen;                 // L2
+        memcpy(&startPacket[pos], filename, nameLen); // V2
         pos += nameLen;
 
         if (llSend(startPacket, pos) < 0) {
@@ -62,7 +64,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             return;
         }
 
-        unsigned char dataBuf[MAX_PAYLOAD_SIZE - 4];
+        // Data Packet
+        unsigned char dataBuf[MAX_PAYLOAD_SIZE - 4]; // Small mistake, should be [MAX_PAYLOAD_SIZE - 3] (header used to be 4 bytes but now is 3, we waste one byte))
         unsigned char dataPacket[MAX_PAYLOAD_SIZE];
         int bytesRead;
         long int currentBytes = 0; // For the progress bar
@@ -71,7 +74,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
         while ((bytesRead = fread(dataBuf, 1, sizeof(dataBuf), file)) > 0)
         {
-            dataPacket[0] = 2; // C = 2 (DATA)
+            dataPacket[0] = 2;               // C = 2 (DATA)
             dataPacket[1] = bytesRead / 256; // L2
             dataPacket[2] = bytesRead % 256; // L1
             memcpy(&dataPacket[3], dataBuf, bytesRead); 
@@ -81,19 +84,20 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 llCloseTx();
                 return;
             }
-            currentBytes += bytesRead;
+            currentBytes += bytesRead; // For the progress bar
 
             // PROGRESS BAR (TX)
             int progress = (int)((currentBytes * 100.0) / fileSize);
             printf("\r[Tx] Progress: [%3d%%] (%ld/%ld bytes)", progress, currentBytes, fileSize);
-            fflush(stdout); // Forces the terminal to update the current line
+            fflush(stdout); // Forces the terminal to update the current line (the progress bar remains at the bottom)
         }
 
         printf("\n[Tx] File transmitted at 100%%!\n");
 
+        // Control Packet END
         unsigned char endPacket[MAX_PAYLOAD_SIZE];
-        endPacket[0] = 3; 
-        memcpy(&endPacket[1], &startPacket[1], pos - 1); 
+        endPacket[0] = 3;                                // C = 3 (END)
+        memcpy(&endPacket[1], &startPacket[1], pos - 1); // Copy all from START Packet to END Packet besides the C
         
         llSend(endPacket, pos);
 
@@ -120,12 +124,12 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         {
             int bytesRead = llReceive(packet);
             
-            if (bytesRead < 0) continue; 
-            if (bytesRead == 0) continue; 
+            if (bytesRead < 0) continue;      // Error
+            if (bytesRead == 0) continue;     // No Data
 
             unsigned char c = packet[0];
 
-            if (c == 1) { 
+            if (c == 1) { // START Control Packet
                 file = fopen(filename, "wb");
                 if (file == NULL) {
                     printf("[ERROR] Could not create file %s\n", filename);
@@ -138,22 +142,22 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 printf("[Rx] START packet received. Expected size: %ld bytes.\n", fileSize);
                 printf("[Rx] Starting data reception...\n");
             }
-            else if (c == 2) { 
+            else if (c == 2) { // DATA Control Packet
                 if (file == NULL) continue;
                 
-                int k = 256 * packet[1] + packet[2];
+                int k = 256 * packet[1] + packet[2]; // Calculate size of data field
                 fwrite(&packet[3], 1, k, file);
 
-                currentBytes += k;
+                currentBytes += k;                   // For progress bar
 
                 // PROGRESS BAR (RX)
                 if (fileSize > 0) {
                     int progress = (int)((currentBytes * 100.0) / fileSize);
                     printf("\r[Rx] Progress: [%3d%%] (%ld/%ld bytes)", progress, currentBytes, fileSize);
-                    fflush(stdout);
+                    fflush(stdout); // Forces the terminal to update the current line (the progress bar remains at the bottom)
                 }
             }
-            else if (c == 3) { 
+            else if (c == 3) { // END Control Packet
                 printf("\n[Rx] END packet received. Reception at 100%%!\n");
                 break; 
             }

@@ -73,7 +73,7 @@ static void printStatistics(void)
 // ---------------------------------------------------------------------------
 // Alarm handling for retransmission timeout
 // ---------------------------------------------------------------------------
-static volatile sig_atomic_t alarmCount = 0;
+static volatile sig_atomic_t alarmCount = 0;            // Only for debugging and prints
 static volatile sig_atomic_t timeoutOccurred = FALSE;
 
 void alarmHandler(int signal)
@@ -84,9 +84,9 @@ void alarmHandler(int signal)
 
 static int installAlarmHandler(void)
 {
-    struct sigaction act = {0};
-    act.sa_handler = &alarmHandler;
-    if (sigaction(SIGALRM, &act, NULL) == -1)
+    struct sigaction act = {0};                 // Zero-initializes the struct
+    act.sa_handler = &alarmHandler;             // Which funtion to call -> alarmHandler
+    if (sigaction(SIGALRM, &act, NULL) == -1)   // Registers it. Handle SIGALRM with new handler
     {
         perror("sigaction");
         return -1;
@@ -136,7 +136,7 @@ static int waitForFrame(unsigned char a, unsigned char c, unsigned char bcc, int
     if (useAlarm)
     {
         timeoutOccurred = FALSE;
-        alarm(timeoutSec);
+        alarm(timeoutSec);              // Engage alarm
     }
 
     while (1)
@@ -257,7 +257,7 @@ int llOpenTx(LinkLayer llParameters)
             return 0;
         }
 
-        if (res < 0)
+        if (res < 0) // WaitFroFrame Error
         {
             closeSerialPort();
             return -1;
@@ -421,6 +421,7 @@ int llSend(const unsigned char *buf, int bufSize) {
     frame[2] = (txSequenceNumber == 0) ? C_N0 : C_N1;
     frame[3] = frame[1] ^ frame[2]; 
 
+    // Byte Stuffing
     int j = 4;
     for (int i = 0; i < bufSize; i++) {
         if (buf[i] == FLAG || buf[i] == ESC) {
@@ -431,6 +432,7 @@ int llSend(const unsigned char *buf, int bufSize) {
         }
     }
 
+    // Stuff BCC2 (if necessary)
     if (bcc2 == FLAG || bcc2 == ESC) {
         frame[j++] = ESC;
         frame[j++] = bcc2 ^ ESC_XOR;
@@ -438,6 +440,7 @@ int llSend(const unsigned char *buf, int bufSize) {
         frame[j++] = bcc2;
     }
 
+    // End of frame
     frame[j++] = FLAG; 
     int frameSize = j;
 
@@ -524,7 +527,7 @@ int llReceive(unsigned char *packet)
                 break;
             case 4:
                 if (byte == FLAG) state = 1; 
-                else if (byte == ESC) state = 6;
+                else if (byte == ESC) state = 6; // Go to state 6 to destuff the byte
                 else {
                     if (packetIndex > MAX_PAYLOAD_SIZE) {
                         state = 0;
@@ -537,21 +540,22 @@ int llReceive(unsigned char *packet)
                 break;
             case 5:
                 if (byte == ESC) {
-                    state = 6;
+                    state = 6;          // Go to state 6 to destuff the byte
                 }
                 else if (byte == FLAG) {
-                    if (packetIndex < 1) { state = 0; packetIndex = 0; break; }
+                    if (packetIndex < 1) { state = 0; packetIndex = 0; break; } // Shouldn't happen
 
                     int dataSize = packetIndex - 1;
-                    unsigned char receivedBcc2 = packet[dataSize];
-
+                    unsigned char receivedBcc2 = packet[dataSize]; // BCC2 is always the last byte (the last FLAG was not added)
+                    
+                    // Calculate expected BCC2
                     unsigned char calcBcc2 = packet[0];
                     for (int i = 1; i < dataSize; i++) calcBcc2 ^= packet[i];
 
                     int isDuplicate = ((cField == C_N0 && rxSequenceNumber == 1) ||
                                        (cField == C_N1 && rxSequenceNumber == 0));
 
-                    if (receivedBcc2 != calcBcc2) {
+                    if (receivedBcc2 != calcBcc2) { // BCC2 is not the expected
                         if (isDuplicate) {
                             unsigned char rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;
                             sendSupervisionFrame(A_SENDER, rrC);
@@ -566,17 +570,17 @@ int llReceive(unsigned char *packet)
                         packetIndex = 0;
                         break;
                     }
-                    else {
+                    else { // BCC2 is the expected
                         unsigned char rrC;
                         if (isDuplicate) {
-                            rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;   // N(r) = rxSequenceNumber
+                            rrC = (rxSequenceNumber == 0) ? C_RR0 : C_RR1;   // Send RR for the same frame
                         } else {
-                            rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;   // N(r) = (rxSequenceNumber + 1) mod 2
+                            rrC = (rxSequenceNumber == 0) ? C_RR1 : C_RR0;   // Send Rr for next frame
                         }
                         sendSupervisionFrame(A_SENDER, rrC);
                         statRRSent++;
 
-                        if (!isDuplicate) {
+                        if (!isDuplicate) { // If it was not a duplicate we can increase the sequence
                             rxSequenceNumber = (rxSequenceNumber + 1) % 2;
                             statIFramesReceived++;
                             statBytesReceived += dataSize;
@@ -594,10 +598,10 @@ int llReceive(unsigned char *packet)
                         packetIndex = 0;
                         break;
                     }
-                    packet[packetIndex++] = byte;
+                    packet[packetIndex++] = byte; // Add to packet and repeat case 5
                 }
                 break;
-            case 6: 
+            case 6: // Destuff the byte
                 state = 5;
                 if (byte == (FLAG ^ ESC_XOR) || byte == (ESC ^ ESC_XOR)) {
                     if (packetIndex > MAX_PAYLOAD_SIZE) {
